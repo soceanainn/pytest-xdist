@@ -412,6 +412,42 @@ def setup_config(config: pytest.Config, basetemp: str | None) -> None:
     config.option.basetemp = basetemp
 
 
+def apply_worker_memory_limit(max_gib: int) -> None:
+    """Cap this worker's address space without raising any existing limits."""
+    if not max_gib:
+        return
+
+    import platform
+
+    system = platform.system()
+    if system not in ("Linux", "Darwin"):
+        return
+    # macOS 12 (Darwin 21) added enforcement of the virtual address space limit.
+    if system == "Darwin" and int(platform.release().split(".")[0]) < 21:
+        return
+
+    import resource
+
+    max_bytes = max_gib * 1024**3
+    soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+    limits = (
+        max_bytes if soft == resource.RLIM_INFINITY else min(soft, max_bytes),
+        max_bytes if hard == resource.RLIM_INFINITY else min(hard, max_bytes),
+    )
+    if limits != (soft, hard):
+        try:
+            resource.setrlimit(resource.RLIMIT_AS, limits)
+        except (ValueError, OSError) as e:
+            if system != "Darwin":
+                raise
+            raise ValueError(
+                f"Cannot apply worker_max_virtual_memory_gib={max_gib}: {e}. "
+                "macOS rejects limits below the process's current virtual address "
+                "space, which can already be hundreds of GiB at startup. "
+                "Choose a higher limit or use 0 to disable it."
+            ) from e
+
+
 if __name__ == "__channelexec__":
     channel: execnet.Channel = channel  # type: ignore[name-defined] # noqa: F821, PLW0127
     workerinput, args, option_dict, change_sys_path = channel.receive()  # type: ignore[name-defined]
@@ -428,6 +464,8 @@ if __name__ == "__channelexec__":
     os.environ["PYTEST_XDIST_TESTRUNUID"] = workerinput["testrunuid"]
     os.environ["PYTEST_XDIST_WORKER"] = workerinput["workerid"]
     os.environ["PYTEST_XDIST_WORKER_COUNT"] = str(workerinput["workercount"])
+
+    apply_worker_memory_limit(workerinput.get("worker_max_virtual_memory_gib", 0))
 
     config = _prepareconfig(args, None)
 

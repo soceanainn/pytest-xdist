@@ -56,6 +56,9 @@ Parallelization can be configured further with these options:
 * ``--max-worker-restart``: maximum number of workers that can be restarted
   when crashed (set to zero to disable this feature).
 
+* ``--worker-max-virtual-memory-gib=GIB``: cap each worker's virtual address
+  space on Linux and macOS 12 or later. See :ref:`worker memory limits` for details.
+
 * ``--ramp=DURATION``: gradually start worker test execution over a duration.
   Workers still start and collect tests normally, but each worker waits before
   its first test according to its position in the worker pool. The duration is
@@ -143,3 +146,49 @@ The test distribution algorithm is configured with the ``--dist`` command-line o
   or better reuse of fixtures.
 
 * ``--dist no``: The normal pytest execution mode, runs one test at a time (no distribution at all).
+
+
+.. _worker memory limits:
+
+Limiting worker memory
+----------------------
+
+On Linux and macOS 12 or later, use ``--worker-max-virtual-memory-gib`` to make
+runaway allocations fail inside the offending worker instead of exhausting
+memory for the entire CI job::
+
+    pytest -n auto --worker-max-virtual-memory-gib=64
+
+You can also set a default in your pytest configuration:
+
+.. code-block:: ini
+
+    [pytest]
+    worker_max_virtual_memory_gib = 64
+
+The command-line option takes precedence over the configuration value. The
+value must be a non-negative integer in GiB (1 GiB = 1024**3 bytes). The default
+is ``0``, which disables the limit; passing ``--worker-max-virtual-memory-gib=0``
+also disables a configured limit.
+
+The limit applies to each worker, including replacement workers, before loading
+test configuration and collecting tests. It does not apply to the controller
+process or serial runs (``-n0``). Older macOS versions and other operating systems
+ignore the setting.
+
+This uses ``resource.RLIMIT_AS`` to cap both the soft and hard limits, preserving
+any stricter existing limits. It caps **virtual address space**, not resident
+memory (RSS), so allow headroom for shared libraries, memory mappings, and other
+reservations. A limit below the worker's startup requirements can prevent the
+worker from starting. The cap does not enforce a combined memory budget across
+workers.
+
+On macOS, the limit must exceed the worker's current virtual address space or
+the operating system rejects it at startup. In particular, Apple silicon can
+reserve hundreds of GiB of virtual address space even for a small Python process.
+A value suitable for Linux, such as ``64``, may therefore be too low for macOS;
+allow for these reservations when choosing a limit.
+
+Allocations that exceed the cap typically raise ``MemoryError`` or an allocation
+error in the test. Native code that does not handle allocation failure may crash
+the worker; xdist handles that through its usual worker restart mechanism.

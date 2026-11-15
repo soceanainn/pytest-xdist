@@ -319,6 +319,9 @@ class WorkerController:
             "testrunuid": nodemanager.testrunuid,
             "mainargv": sys.argv,
             "rampdelay": rampdelay,
+            "worker_max_virtual_memory_gib": config.getoption(
+                "worker_max_virtual_memory_gib"
+            ),
         }
         self._down = False
         self._shutdown_sent = False

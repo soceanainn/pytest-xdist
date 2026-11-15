@@ -166,6 +166,21 @@ def parse_ramp_duration(s: str) -> float:
     return seconds * multipliers[unit]
 
 
+def parse_worker_max_virtual_memory_gib(value: str) -> int:
+    try:
+        max_gib = int(value)
+    except ValueError as e:
+        raise pytest.UsageError(
+            "worker_max_virtual_memory_gib must be a non-negative integer"
+        ) from e
+    if max_gib < 0 or max_gib > sys.maxsize // 1024**3:
+        raise pytest.UsageError(
+            "worker_max_virtual_memory_gib must be a non-negative integer "
+            f"no greater than {sys.maxsize // 1024**3}"
+        )
+    return max_gib
+
+
 @pytest.hookimpl
 def pytest_addoption(parser: pytest.Parser) -> None:
     # 'Help' formatting (same rules as pytest's):
@@ -202,6 +217,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         dest="maxworkerrestart",
         help="Maximum number of workers that can be restarted "
         "when crashed (set to zero to disable this feature)",
+    )
+    group.addoption(
+        "--worker-max-virtual-memory-gib",
+        action="store",
+        default=None,
+        type=parse_worker_max_virtual_memory_gib,
+        metavar="GIB",
+        help=(
+            "Limit each worker's virtual address space in GiB (Linux/macOS 12+). "
+            "Overrides worker_max_virtual_memory_gib; 0 disables the limit."
+        ),
     )
     group.addoption(
         "--ramp",
@@ -342,6 +368,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
     parser.addini(
+        "worker_max_virtual_memory_gib",
+        "Maximum virtual address space per worker in GiB (Linux/macOS 12+); 0 disables",
+        default="0",
+    )
+    parser.addini(
         "rsyncdirs",
         "list of (relative) paths to be rsynced for remote distributed testing.",
         type="paths",
@@ -377,6 +408,13 @@ def pytest_addhooks(pluginmanager: pytest.PytestPluginManager) -> None:
 
 @pytest.hookimpl(trylast=True)
 def pytest_configure(config: pytest.Config) -> None:
+    max_gib = config.getoption("worker_max_virtual_memory_gib")
+    if max_gib is None:
+        max_gib = parse_worker_max_virtual_memory_gib(
+            config.getini("worker_max_virtual_memory_gib")
+        )
+    config.option.worker_max_virtual_memory_gib = max_gib
+
     config_line = (
         "xdist_group: specify group for tests should run in same session."
         "in relation to one another. Provided by pytest-xdist."
